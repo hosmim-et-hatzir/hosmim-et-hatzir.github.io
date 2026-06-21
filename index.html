@@ -436,7 +436,7 @@ const $=id=>document.getElementById(id);
 const G={
   scene:null, camera:null, renderer:null, world:null, dyn:null,
   peeps:[], cars:[], cops:[], horses:[], drivers:[], bubbles:[], fx:[],
-  cannon:null, train:null,
+  cannon:null, trains:[],
   selected:new Set(),
   score:0, escTime:0, gameTime:0, blockTimePeak:0, jamPeak:0,
   wave:0, stage:0, running:false, paused:false,
@@ -1117,7 +1117,7 @@ function clearWorld(){
   G.world=new THREE.Group(); G.dyn=new THREE.Group();
   G.scene.add(G.world); G.scene.add(G.dyn);
   G.peeps=[]; G.cars=[]; G.cops=[]; G.horses=[]; G.drivers=[]; G.bubbles=[]; G.fx=[];
-  G.cannon=null; G.train=null; G.selected.clear();
+  G.cannon=null; G.trains=[]; G.selected.clear();
 }
 
 function buildMap(i){
@@ -1132,7 +1132,7 @@ function buildMap(i){
     G.laneDefs=[ {z:-5.3,dir:1,speed:map.speed},{z:-1.8,dir:1,speed:map.speed*.9},
                  {z:1.8,dir:-1,speed:map.speed*.9},{z:5.3,dir:-1,speed:map.speed} ];
   }else{
-    G.laneDefs=[ {z:-3.6,dir:1,speed:map.speed}, {z:3.6,dir:-1,speed:map.speed} ];
+    G.laneDefs=[ {z:-5.0,dir:1,speed:map.speed}, {z:5.0,dir:-1,speed:map.speed} ];
   }
   mkRoadBase(G.world,map);
   // פנסי רחוב — תאורת נתרן כתומה
@@ -1225,21 +1225,28 @@ function buildKvish4(){
 /* ---------- מפה 3: גשר המיתרים ---------- */
 function buildGesher(){
   const p=G.world, hw=G.roadHalfW;
-  // מסילת רכבת קלה במרכז
-  [-1,1].forEach(s=>{
-    const rail=bx(G.roadLen,.05,.09,0xb8bcc2); rail.castShadow=false;
-    put(p,rail,0,.03,s*.72);
+  // ===== שתי מסילות רכבת קלה נפרדות (כיוון לכל מסילה) =====
+  [-TRACK_Z,TRACK_Z].forEach(tc=>{
+    // מצע המסילה
+    const bed=texPlane(G.roadLen,2.4,null); bed.material=MAT(0x55585e);
+    bed.rotation.x=-Math.PI/2; bed.position.set(0,.012,tc); bed.receiveShadow=true; p.add(bed);
+    // אדנים
+    for(let X=-95;X<95;X+=2.2){ const tie=bx(.25,.02,1.9,0x3a3c40); tie.castShadow=false; put(p,tie,X,.02,tc); }
+    // שני פסי הברזל של המסילה
+    [-1,1].forEach(s=>{
+      const rail=bx(G.roadLen,.05,.09,0xb8bcc2); rail.castShadow=false;
+      put(p,rail,0,.03,tc+s*.72);
+    });
+    // חוט החשמל העילי מעל המסילה
+    const wirePts=[]; for(let X=-90;X<=90;X+=10) wirePts.push(new THREE.Vector3(X,5.25,tc));
+    p.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(wirePts),new THREE.LineBasicMaterial({color:0x222222})));
   });
-  const bed=texPlane(G.roadLen,2.4,null); bed.material=MAT(0x55585e);
-  bed.rotation.x=-Math.PI/2; bed.position.y=.012; bed.receiveShadow=true; p.add(bed);
-  for(let X=-95;X<95;X+=2.2){ const tie=bx(.25,.02,1.9,0x3a3c40); tie.castShadow=false; put(p,tie,X,.02,0); }
-  // עמודי חשמל עילי למסילה
+  // ===== רווח קטן בין שתי המסילות + עמודי חשמל =====
+  const median=bx(G.roadLen,.05,.35,0x6b6e74); median.receiveShadow=true; put(p,median,0,.03,0);   // פס הפרדה דק ונמוך
   for(let X=-80;X<=80;X+=26){
-    put(p,cyl(.07,5.6,0x777c84),X,2.8,1.55);
-    const arm=cyl(.045,1.7,0x777c84); arm.rotation.x=Math.PI/2; put(p,arm,X,5.4,.7);
+    put(p,cyl(.08,5.6,0x777c84),X,2.8,0);                                                          // עמוד החשמל
+    const arm=cyl(.045,2*TRACK_Z+.6,0x777c84); arm.rotation.x=Math.PI/2; put(p,arm,X,5.4,0);       // זרוע שמחזיקה את שני החוטים
   }
-  const wirePts=[]; for(let X=-90;X<=90;X+=10) wirePts.push(new THREE.Vector3(X,5.25,0));
-  p.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(wirePts),new THREE.LineBasicMaterial({color:0x222222})));
   // מעקות הגשר הלבנים
   [-1,1].forEach(s=>{
     for(let X=-95;X<=95;X+=3) put(p,bx(.12,1.1,.12,0xf2f3f5),X,.62,s*(hw+.35));
@@ -1708,45 +1715,78 @@ function countStopped(){
   return n;
 }
 
-/* ---------------- רכבת קלה (מפה 3) ---------------- */
+/* ---------------- רכבת קלה דו־כיוונית (מפה 3) ---------------- */
+const TRAIN_MAX_V=13, TRAIN_LEN=23, TRAIN_BRAKE=2.6, TRAIN_MAXCOUNT=6, TRACK_Z=1.5;
+function spawnTrain(dir){
+  // dir=+1 נכנסת משמאל ונוסעת ימינה, dir=-1 נכנסת מימין ונוסעת שמאלה
+  const z=dir>0?-TRACK_Z:TRACK_Z;                        // כל כיוון על מסילה נפרדת משלו
+  const startS=dir>0?-G.roadLen/2-26:G.roadLen/2+26;
+  // לא להוליד אם כבר עומדת רכבת קרובה לנקודת הכניסה (כדי שיצטברו לפקק ולא יתחפפו)
+  for(const o of G.trains){ if(o.dir===dir && Math.abs(o.s-startS)<TRAIN_LEN+8) return false; }
+  const g=mkCarMesh('tram');
+  if(dir<0) g.rotation.y=Math.PI;
+  const t={obj:g,s:startS,z,v:TRAIN_MAX_V,dir,len:TRAIN_LEN,blocked:false};
+  g.position.set(t.s,0,t.z);
+  G.trains.push(t); G.dyn.add(g);
+  return true;
+}
 function updateTrain(dt){
-  if(G.stage!==2) return;
-  if(!G.train){
-    G.trainTimer=(G.trainTimer??14)-dt;
-    if(G.trainTimer<=0){
-      const g=mkCarMesh('tram');
-      G.train={obj:g,s:-G.roadLen/2-26,v:13,len:23,blocked:false,bonusGiven:false};
-      G.dyn.add(g);
-    }
+  if(G.stage!==2){
+    if(G.trains.length){ for(const t of G.trains) G.dyn.remove(t.obj); G.trains.length=0; $('trainBonus').style.display='none'; }
     return;
   }
-  const t=G.train, front=t.s+t.len/2;
-  let gap=Infinity, peepHit=null;
-  for(const p of G.peeps){
-    if(!p.onRoad()) continue;
-    if(Math.abs(p.obj.position.z)>1.6) continue;        // מסדרון המסילה
-    const d=p.obj.position.x-.45-front;
-    if(d>-2&&d<gap){ gap=d; peepHit=p; }
+  // טיימר הולדה — מזמן רכבות חדשות מכיוון אקראי, עד תקרה. רכבות נוספות מצטברות ונתקעות בפקק
+  G.trainTimer=(G.trainTimer??18)-dt;
+  if(G.trainTimer<=0){
+    if(G.trains.length<TRAIN_MAXCOUNT) spawnTrain(Math.random()<.5?1:-1);
+    G.trainTimer=rnd(14,28);
   }
-  const brake=2.6, margin=2;
-  if(gap===Infinity) t.v=Math.min(t.v+1.5*dt,13);
-  else{
-    const d=gap-margin;
-    if(d<=0) t.v=Math.max(0,t.v-brake*2*dt);
-    else t.v=Math.min(t.v+1.5*dt,13,Math.sqrt(2*brake*Math.max(0,d)));
+  let anyBlocked=false;
+  for(const t of G.trains){
+    const dir=t.dir, nose=t.s+dir*t.len/2;
+    let gap=Infinity, peepHit=null;
+    // מפגינים על מסדרון המסילה
+    for(const p of G.peeps){
+      if(!p.onRoad()) continue;
+      if(Math.abs(p.obj.position.z-t.z)>1.6) continue;
+      const d=dir*(p.obj.position.x-nose)-.45;
+      if(d>-2&&d<gap){ gap=d; peepHit=p; }
+    }
+    // רכבות אחרות לפנים (מאותו כיוון מאחור, או כיוון נגדי על אותה מסילה) — יוצר פקק רכבות
+    for(const o of G.trains){
+      if(o===t) continue;
+      if(Math.abs(o.z-t.z)>1.0) continue;               // רק אם חולקות מסילה
+      const ahead=dir*(o.s-t.s);
+      if(ahead<=0) continue;                            // רק מי שלפנים
+      const d=ahead-(t.len+o.len)/2;
+      if(d<gap){ gap=d; peepHit=null; }
+    }
+    const margin=2;
+    if(gap===Infinity) t.v=Math.min(t.v+1.5*dt,TRAIN_MAX_V);
+    else{
+      const d=gap-margin;
+      if(d<=0) t.v=Math.max(0,t.v-TRAIN_BRAKE*2*dt);
+      else t.v=Math.min(t.v+1.5*dt,TRAIN_MAX_V,Math.sqrt(2*TRAIN_BRAKE*Math.max(0,d)));
+    }
+    t.s+=dir*t.v*dt;
+    if(peepHit && gap<.6 && t.v>2) runOver(peepHit,null);
+    const wasBlocked=t.blocked;
+    t.blocked=(t.v<.2 && gap<25);
+    if(t.blocked&&!wasBlocked){
+      newsFlash('🚋 דרמה: הרכבת הקלה נעצרה על גשר המיתרים! בונוס ענק!');
+      AUDIO.ding();
+    }
+    if(t.blocked) anyBlocked=true;
+    t.obj.position.set(t.s,0,t.z);
   }
-  t.s+=t.v*dt;
-  if(peepHit && gap<.6 && t.v>2) runOver(peepHit,null);
-  const wasBlocked=t.blocked;
-  t.blocked=(t.v<.2 && gap<25);
-  if(t.blocked&&!wasBlocked){
-    $('trainBonus').style.display='block';
-    newsFlash('🚋 דרמה: הרכבת הקלה נעצרה על גשר המיתרים! בונוס ענק!');
-    AUDIO.ding();
+  $('trainBonus').style.display=anyBlocked?'block':'none';
+  // הסרת רכבות שיצאו מהגשר
+  for(let i=G.trains.length-1;i>=0;i--){
+    const t=G.trains[i];
+    if((t.dir>0&&t.s>G.roadLen/2+30)||(t.dir<0&&t.s<-G.roadLen/2-30)){
+      G.dyn.remove(t.obj); G.trains.splice(i,1);
+    }
   }
-  if(!t.blocked) $('trainBonus').style.display='none';
-  t.obj.position.set(t.s,0,0);
-  if(t.s>G.roadLen/2+30){ G.dyn.remove(t.obj); G.train=null; G.trainTimer=rnd(30,50); $('trainBonus').style.display='none'; }
 }
 
 /* ---------------- דריסה (לא גרפי, מינוס נקודות) ---------------- */
@@ -2621,14 +2661,29 @@ function updateCannon(dt,now){
     if(c.refillT<=0){ c.tank=25; toast('המיכל התמלא — המכת"זית חוזרת לפעולה!','bad'); }
     updateTankHUD(); return;
   }
-  // בחירת מטרה — המפגין הקרוב ביותר על הכביש
-  let best=1e9,t=null;
+  // בחירת מטרה — המפגין הקרוב ביותר על הכביש + מרכז ההתקהלות
+  let best=1e9,t=null, cx=0, n=0;
   for(const p of G.peeps){
     if(!p.onRoad()||p.state==='hit'||p.state==='flee') continue;
+    cx+=p.obj.position.x; n++;
     const dd=dist2(p.obj.position.x,p.obj.position.z,c.obj.position.x,c.obj.position.z);
     if(dd<best){best=dd;t=p;}
   }
-  if(!t||best>3600){ c.pts.visible=false; AUDIO.spray(false); return; }
+  if(!t){ c.pts.visible=false; AUDIO.spray(false); return; }
+  // אם המפגינים התרכזו רחוק מטווח הריסוס — המכת"זית נוסעת לעברם
+  const inRange = best<=1600;                       // טווח ריסוס נוח (~40 מ')
+  if(!inRange){
+    const center=cx/n;
+    const want=clamp(center+(c.obj.position.x>=center?20:-20),-G.roadLen/2+8,G.roadLen/2+25);
+    const dx=want-c.obj.position.x;
+    if(Math.abs(dx)>1){
+      const step=Math.sign(dx)*Math.min(7.5*dt,Math.abs(dx));
+      c.obj.position.x+=step;
+      c.obj.rotation.y=step<0?Math.PI:0;            // פני הרכב לכיוון הנסיעה
+    }
+    c.pts.visible=false; AUDIO.spray(false);
+    return;                                          // בזמן נסיעה לא מרססת
+  }
   // ריסוס!
   c.tank-=dt; c.sprayLvlT+=dt;
   if(c.tank<=0){ c.refillT=15; toast('המיכל ריק! 15 שניות — חלון זהב לחזור לכביש!','good'); AUDIO.ding(); updateTankHUD(); return; }
@@ -2883,9 +2938,10 @@ function dangerAt(x,z){
     const d=lane.dir*x-(c.s+c.len/2);
     if(d>-1 && d < c.v*c.v/(2*BRAKE)+4) { if(c.v>1) return true; }
   }
-  if(G.train&&Math.abs(z)<1.7){
-    const d=x-(G.train.s+G.train.len/2);
-    if(d>-1 && d<G.train.v*G.train.v/(2*2.6)+9 && G.train.v>1) return true;
+  for(const t of G.trains){
+    if(Math.abs(z-t.z)>1.7) continue;
+    const d=t.dir*(x-(t.s+t.dir*t.len/2));
+    if(d>-1 && d<t.v*t.v/(2*2.6)+9 && t.v>1) return true;
   }
   return false;
 }
@@ -3170,7 +3226,7 @@ function scoreTick(dt){
   scoreAcc-=1;
   const stopped=countStopped();
   if(stopped) addScore(10*stopped);
-  if(G.train&&G.train.blocked) addScore(50);
+  for(const t of G.trains) if(t.blocked) addScore(50);
   // חוק: הכביש ריק לגמרי והפקק ירד ל-0 — ההפגנה הסתיימה והניקוד נקבע
   if(G.protestStarted){
     const onRoadN=G.peeps.filter(p=>p.onRoad()).length;
@@ -3232,7 +3288,7 @@ function startStage(i){
     G.escTime=0; G.wave=0; G.gameTime=0; G.shofarUsed=false; G.bagT=0;
     G.runovers=0; G.fled=0; G.jamPeak=0; G.bigJamNews=false;
     G.protestStarted=false; G.emptyT=0;
-    G.spawnTimers=[]; G.trainTimer=14; G.copCars=[]; G.drivers=[];
+    G.spawnTimers=[]; G.trainTimer=18; G.copCars=[]; G.drivers=[];
     scoreAcc=0; newsQ=['🔴 מבזק: הפגנה מתארגנת ב'+MAPS[i].name]; newsT=0;
     $('tankWrap').style.display='none';
     $('trainBonus').style.display='none';
