@@ -148,8 +148,24 @@
   /* אינטרסטיציאל פרסומת מסך-מלא */
   #houseAdOverlay{position:fixed;inset:0;z-index:9999;background:#000;display:flex;align-items:center;justify-content:center}
   #houseAdOverlay.hidden{display:none}
-  #houseAdOverlay a{display:flex;align-items:center;justify-content:center;width:100%;height:100%}
+  #houseAdOverlay .adItem{display:none;align-items:center;justify-content:center;width:100%;height:100%}
+  #houseAdOverlay .adItem.show{display:flex}
+  #adMort{cursor:pointer}
   #houseAdOverlay img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block}
+  /* טופס השארת פרטים (לידים) */
+  #leadForm{position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,.74);display:flex;align-items:center;justify-content:center;padding:16px}
+  #leadForm.hidden{display:none}
+  .leadCard{position:relative;width:min(420px,94vw);max-height:92vh;overflow:auto;background:#fffdf6;border-radius:16px;padding:22px 20px 20px;box-shadow:0 14px 50px rgba(0,0,0,.55);text-align:right;direction:rtl}
+  .leadCard h2{margin:0 0 4px;font-size:21px;color:#15315c}
+  .lfSub{margin:0 0 14px;color:#6b6256;font-size:14px}
+  .leadCard input,.leadCard textarea{width:100%;box-sizing:border-box;margin-bottom:10px;padding:11px 13px;border:1.5px solid #d8cdb6;border-radius:10px;font-size:15px;font-family:inherit;background:#fff;color:#222}
+  .leadCard input:focus,.leadCard textarea:focus{outline:none;border-color:#c79a3a;box-shadow:0 0 0 3px rgba(199,154,58,.2)}
+  .leadCard textarea{resize:vertical;min-height:64px}
+  .lfBtn{width:100%;padding:13px;border:none;border-radius:10px;background:linear-gradient(180deg,#c0392b,#9d1f1f);color:#fff;font-size:17px;font-weight:800;cursor:pointer;font-family:inherit}
+  .lfBtn:hover{filter:brightness(1.08)} .lfBtn:disabled{opacity:.6;cursor:default}
+  .lfMsg{min-height:18px;margin-bottom:8px;font-size:14px;font-weight:700;color:#9d1f1f}
+  .lfMsg.ok{color:#1c7c3a}
+  .leadX{position:absolute;top:8px;left:10px;width:32px;height:32px;border-radius:50%;border:none;background:#eee;color:#444;font-size:17px;font-weight:700;cursor:pointer;line-height:1}
   #houseAdClose{position:fixed;top:14px;right:16px;z-index:10000;width:46px;height:46px;border-radius:50%;
     border:2px solid rgba(255,255,255,.9);background:rgba(0,0,0,.55);color:#fff;font-size:23px;font-weight:700;
     cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;padding:0;
@@ -221,15 +237,38 @@
   </div>
 </div>
 
-<!-- ======== אינטרסטיציאל פרסומת מסך-מלא (זירת האדריכלות) ======== -->
+<!-- ======== אינטרסטיציאל פרסומת מסך-מלא (מתחלף: אדריכלות / משכנתא) ======== -->
 <div id="houseAdOverlay" class="hidden">
   <button id="houseAdClose" aria-label="סגור פרסומת" onclick="document.getElementById('houseAdOverlay').classList.add('hidden')">✕</button>
-  <a href="https://www.ziratadrichalut.co.il/find-designer" target="_blank" rel="noopener sponsored">
+  <!-- אדריכלות — קישור חיצוני לאתר -->
+  <a id="adArch" class="adItem" href="https://www.ziratadrichalut.co.il/find-designer" target="_blank" rel="noopener sponsored">
     <picture>
       <source media="(max-width:600px)" srcset="ad-mobile.jpg">
       <img src="ad-desktop.jpg" alt="זירת האדריכלות — קבלו 3 הצעות ממעצבות פנים מקצועיות, ללא עלות">
     </picture>
   </a>
+  <!-- משכנתא — פותח טופס השארת פרטים -->
+  <div id="adMort" class="adItem" role="button" tabindex="0" onclick="openLeadForm('mortgage')">
+    <picture>
+      <source media="(max-width:600px)" srcset="ad2-mobile.jpg">
+      <img src="ad2-desktop.jpg" alt="ישראל גולדשמיד — משכנתא בקלות. הבנק סירב? יש פתרון, יש דרך">
+    </picture>
+  </div>
+</div>
+
+<!-- ======== טופס השארת פרטים (לידים) ======== -->
+<div id="leadForm" class="hidden" data-src="mortgage">
+  <div class="leadCard">
+    <button class="leadX" aria-label="סגור" onclick="closeLeadForm()">✕</button>
+    <h2 id="lfTitle">השארת פרטים — ייעוץ משכנתא</h2>
+    <p class="lfSub">מלאו פרטים ונחזור אליכם בהקדם 🙏</p>
+    <input id="lfName" type="text" placeholder="שם מלא *" autocomplete="name">
+    <input id="lfPhone" type="tel" placeholder="פלאפון *" inputmode="tel" autocomplete="tel">
+    <input id="lfEmail" type="email" placeholder="כתובת מייל *" inputmode="email" autocomplete="email">
+    <textarea id="lfStory" rows="3" placeholder="הסיפור בקצרה (אופציונלי)"></textarea>
+    <div id="lfMsg" class="lfMsg"></div>
+    <button id="lfSubmit" class="lfBtn" onclick="submitLead()">שליחה »</button>
+  </div>
 </div>
 
 <!-- ======== הוראות ======== -->
@@ -3281,7 +3320,7 @@ function endStage(reason){
   $('btnNext').style.display = (G.stage<2 && reason!=='empty') ? 'block':'none';
   $('hud').style.display='none';
   showScr('summary');        // הסיכום מופיע מיד — בלי השהיה
-  try{ document.getElementById('houseAdOverlay').classList.remove('hidden'); }catch(e){}  // פרסומת מסך-מלא בסיום הפגנה
+  try{ showEndAd(); }catch(e){}  // פרסומת מסך-מלא מתחלפת (אדריכלות/משכנתא) בסיום הפגנה
   showInterstitial();        // פרסומת אינטרסטיציאל מעל (כשזמינה, אחרי אישור גוגל)
 }
 function showInterstitial(){
@@ -3293,6 +3332,48 @@ function showInterstitial(){
       });
     }
   }catch(e){}
+}
+/* ===== פרסומת מתחלפת בסיום + טופס השארת פרטים ===== */
+let _adFlip=0;
+function showEndAd(){
+  const ov=document.getElementById('houseAdOverlay');
+  const arch=document.getElementById('adArch'), mort=document.getElementById('adMort');
+  if(!ov||!arch||!mort) return;
+  _adFlip^=1;                         // מתחלף בכל סיום: פעם משכנתא, פעם אדריכלות
+  const showMort=(_adFlip===1);
+  mort.classList.toggle('show', showMort);
+  arch.classList.toggle('show', !showMort);
+  ov.classList.remove('hidden');
+}
+const LEAD_API='https://hosmim-scores.pages.dev/api/lead';
+function openLeadForm(src){
+  const f=document.getElementById('leadForm');
+  f.dataset.src=src||'mortgage';
+  const m=document.getElementById('lfMsg'); m.textContent=''; m.className='lfMsg';
+  document.getElementById('houseAdOverlay').classList.add('hidden');   // סוגר את הפרסומת מאחור
+  f.classList.remove('hidden');
+  setTimeout(()=>{ try{ document.getElementById('lfName').focus(); }catch(e){} },60);
+}
+function closeLeadForm(){ document.getElementById('leadForm').classList.add('hidden'); }
+async function submitLead(){
+  const $v=id=>document.getElementById(id);
+  const name=$v('lfName').value.trim(), phone=$v('lfPhone').value.trim(),
+        email=$v('lfEmail').value.trim(), story=$v('lfStory').value.trim();
+  const msg=$v('lfMsg');
+  if(name.length<2 || phone.replace(/\D/g,'').length<7 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){
+    msg.className='lfMsg'; msg.textContent='נא למלא שם, פלאפון תקין וכתובת מייל תקינה'; return;
+  }
+  const btn=$v('lfSubmit'); btn.disabled=true; msg.className='lfMsg'; msg.textContent='שולח...';
+  try{
+    const r=await fetch(LEAD_API,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name,phone,email,story,source:$v('leadForm').dataset.src})});
+    if(r.ok){
+      msg.className='lfMsg ok'; msg.textContent='נשלח בהצלחה! נחזור אליכם בהקדם 🙏';
+      ['lfName','lfPhone','lfEmail','lfStory'].forEach(i=>$v(i).value='');
+      setTimeout(closeLeadForm,1800);
+    } else { msg.className='lfMsg'; msg.textContent='אירעה שגיאה, נסו שוב'; }
+  }catch(e){ msg.className='lfMsg'; msg.textContent='שגיאת רשת, נסו שוב'; }
+  btn.disabled=false;
 }
 function confetti(){
   const em=['🎉','🎊','✨','📜','🎩'];
