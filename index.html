@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>חוסמים את הציר — סימולטור הפגנות</title>
 <meta name="description" content="בנו מחסומים, הציבו אברכים, וחסמו את הציר! משחק אסטרטגיה סאטירי בזמן אמת — הפלג הירושלמי.">
+<!-- PWA / אפליקציה -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#15122b">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="חוסמים את הציר">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<script>if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){});});}</script>
 <!-- Google AdSense -->
 <meta name="google-adsense-account" content="ca-pub-9798634643270442">
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9798634643270442" crossorigin="anonymous"></script>
