@@ -120,6 +120,14 @@
   .tool small{display:block;font-weight:400;font-size:10.5px;color:#ffd966}
   .tool:disabled{opacity:.38;cursor:default}
   .tool.warn{border-color:#ff8866}
+  /* תפריט כלים נפתח */
+  .toolWrap{position:relative;display:inline-block}
+  #toolsBtn{border-color:#ffd96688;background:rgba(44,32,74,.92)}
+  .toolPop{position:absolute;bottom:calc(100% + 8px);right:50%;transform:translateX(50%);
+    display:flex;flex-direction:column;gap:6px;background:rgba(16,12,30,.97);padding:9px;border-radius:14px;
+    border:1px solid rgba(255,255,255,.14);box-shadow:0 10px 34px rgba(0,0,0,.55);z-index:45;min-width:196px;max-width:92vw}
+  .toolPop.hidden{display:none}
+  .toolPop .tool{min-width:176px;text-align:right}
   #camBtns{position:fixed;bottom:10px;left:10px;display:flex;flex-direction:column;gap:6px;pointer-events:auto}
   #camBtns .tool{min-width:0;padding:7px 9px;font-size:12.5px}
   #selInfo{position:fixed;bottom:88px;right:50%;transform:translateX(50%);display:none;pointer-events:none}
@@ -441,12 +449,17 @@
     <div class="chip" id="trainBonus" style="display:none;color:#ff6b6b;font-weight:900">🚋 הרכבת הקלה נעצרה! בונוס ענק!</div>
   </div>
   <div id="toolbar">
-    <button class="tool" id="tPash">📜 פשקווילים<small>תגבורת — 500 נק'</small></button>
-    <button class="tool" id="tShofar">🐏 שופר<small>הקפאה — 1000 נק'</small></button>
-    <button class="tool" id="tBag">🛍 שקיות ניילון<small>הגנה ממכת"זית — 2000 נק'</small></button>
-    <button class="tool" id="tBochur">🎩 בחור ישיבה<small>זימון — 50 נק'</small></button>
-    <button class="tool" id="tAvrech">🧔 אברך ותיק<small>זימון — 150 נק'</small></button>
-    <button class="tool" id="tAskan">📱 עסקן<small>זימון — 250 נק'</small></button>
+    <div class="toolWrap">
+      <button class="tool" id="toolsBtn">🧰 כלים ▾<small>כוחות · שופר · שקיות</small></button>
+      <div id="toolsPop" class="toolPop hidden">
+        <button class="tool" id="tPash">📜 פשקווילים<small>תגבורת — 500 נק'</small></button>
+        <button class="tool" id="tShofar">🐏 שופר<small>הקפאה — 1000 נק'</small></button>
+        <button class="tool" id="tBag">🛍 שקיות ניילון<small>הגנה ממכת"זית — 2000 נק'</small></button>
+        <button class="tool" id="tBochur">🎩 בחור ישיבה<small>זימון — 50 נק'</small></button>
+        <button class="tool" id="tAvrech">🧔 אברך ותיק<small>זימון — 150 נק'</small></button>
+        <button class="tool" id="tAskan">📱 עסקן<small>זימון — 250 נק'</small></button>
+      </div>
+    </div>
     <button class="tool" id="tLie">🛏 שכיבה<small>לנבחרים</small></button>
     <button class="tool" id="tStand">🧍 קימה<small>ושחרור מרכב</small></button>
     <button class="tool warn" id="tEnd">🏁 סיום הפגנה<small>וסיכום</small></button>
@@ -3245,11 +3258,13 @@ function scoreTick(dt){
   $('tAskan').disabled=G.score<250||G.peeps.length>=MAXPEEPS;
   AUDIO.setCrowd(G.peeps.filter(p=>p.onRoad()).length);
   updateSelInfo();
-  // איכות אדפטיבית — שומרים על קצב פריימים
+  // איכות אדפטיבית — מעדיף חדות: מוריד רזולוציה רק בעומס אמיתי, ולעולם לא מתחת לרזולוציה מקורית (1.0)
   const fps=G._fr||0; G._fr=0;
-  if(fps>0&&fps<42) G._low=(G._low||0)+1; else G._low=0;
-  if(G._low===3) G.renderer.setPixelRatio(1);
-  if(G._low===6){ G.renderer.setPixelRatio(.8); G._low=4; }
+  const maxDpr=Math.min(devicePixelRatio,2);
+  if(G._dpr===undefined) G._dpr=maxDpr;
+  if(fps>0&&fps<32) G._low=(G._low||0)+1; else G._low=Math.max(0,(G._low||0)-1);
+  if(G._low>=4 && G._dpr>1){ G._dpr=Math.max(1,+(G._dpr-0.25).toFixed(2)); G.renderer.setPixelRatio(G._dpr); G._low=0; }   // עומס מתמשך — מוריד מעט (רצפה 1.0)
+  else if(G._low===0 && G._dpr<maxDpr && fps>52){ G._dpr=Math.min(maxDpr,+(G._dpr+0.25).toFixed(2)); G.renderer.setPixelRatio(G._dpr); }  // התאוששות — מחזיר חדות
 }
 
 /* =========================================================================
@@ -3494,6 +3509,11 @@ function wireUI(){
   $('tLie').onclick=()=>commandLie();
   $('tStand').onclick=()=>commandStand();
   $('tEnd').onclick=()=>endStage('manual');
+  // תפריט כלים נפתח — פתיחה/סגירה
+  const toolsBtn=$('toolsBtn'), toolsPop=$('toolsPop');
+  toolsBtn.onclick=(e)=>{ e.stopPropagation(); toolsPop.classList.toggle('hidden'); };
+  toolsPop.querySelectorAll('.tool').forEach(b=> b.addEventListener('click',()=>toolsPop.classList.add('hidden')) );
+  document.addEventListener('click',(e)=>{ if(!toolsBtn.parentElement.contains(e.target)) toolsPop.classList.add('hidden'); });
   document.querySelectorAll('#camBtns [data-cam]').forEach(b=>{
     b.onclick=()=>setCamMode(b.dataset.cam);
   });
