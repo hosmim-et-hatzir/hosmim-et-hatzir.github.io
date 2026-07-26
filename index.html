@@ -190,6 +190,16 @@
     box-shadow:0 2px 10px rgba(0,0,0,.5)}
   #houseAdClose:hover{background:rgba(0,0,0,.85);transform:scale(1.06)}
 
+  #entryNotice{position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,.78);
+    display:flex;align-items:center;justify-content:center;padding:20px;direction:rtl}
+  #entryNotice.hidden{display:none}
+  .entryNoticeBox{max-width:720px;width:min(92vw,720px);background:var(--paper);color:var(--ink);
+    border:4px solid var(--ink);outline:2px solid var(--ink);outline-offset:4px;
+    box-shadow:0 24px 70px rgba(0,0,0,.65);padding:24px 26px;text-align:center;
+    font-family:"Heebo","Segoe UI",Arial,sans-serif;font-size:clamp(18px,4.5vw,25px);
+    font-weight:900;line-height:1.65}
+  .entryNoticeBox .btn{max-width:220px;margin-top:18px}
+
   @media (max-width:640px){
     .chip{font-size:12px;padding:5px 9px}
     #ticker{font-size:12px;height:30px}
@@ -215,6 +225,13 @@
 </style>
 </head>
 <body>
+
+<div id="entryNotice" role="dialog" aria-modal="true" aria-labelledby="entryNoticeText">
+  <div class="entryNoticeBox">
+    <div id="entryNoticeText">&#1513;&#1497;&#1502;&#1493; &#1500;&#1489; : &#1499;&#1500; &#1512;&#1489;&#1493;&#1514;&#1497;&#1504;&#1493; &#1502;&#1488;&#1493;&#1512;&#1497; &#1492;&#1491;&#1493;&#1512; &#1488;&#1505;&#1512;&#1493; &#1506;&#1500; &#1511;&#1497;&#1493;&#1501; &#1492;&#1508;&#1490;&#1504;&#1492; &#1488;&#1500;&#1497;&#1502;&#1492;, &#1492;&#1502;&#1508;&#1490;&#1497;&#1503; &#1506;&#1493;&#1513;&#1492; &#1494;&#1488;&#1514; &#1506;&#1500; &#1491;&#1506;&#1514; &#1506;&#1510;&#1502;&#1493; &#1493;&#1497;&#1514;&#1489;&#1506; &#1506;&#1500; &#1494;&#1492; &#1489;&#1513;&#1502;&#1497;&#1497;&#1501;</div>
+    <button class="btn" type="button" onclick="document.getElementById('entryNotice').classList.add('hidden')">&#1492;&#1489;&#1504;&#1514;&#1497;</button>
+  </div>
+</div>
 
 <!-- ======== מסך טוען ======== -->
 <div id="loading" class="scr">
