@@ -498,7 +498,7 @@ const $=id=>document.getElementById(id);
 const G={
   scene:null, camera:null, renderer:null, world:null, dyn:null,
   peeps:[], cars:[], cops:[], horses:[], drivers:[], bubbles:[], fx:[],
-  cannon:null, train:null,
+  cannon:null, trains:[], signal:null, signalLights:[],
   selected:new Set(),
   score:0, escTime:0, gameTime:0, blockTimePeak:0, jamPeak:0,
   wave:0, stage:0, running:false, paused:false,
@@ -1152,16 +1152,21 @@ function mkRoadBase(p,map){
   if(map.lanes===1){ dash(0,false); }
   else { dash(0,true); dash(-3.5,false); dash(3.5,false); }
   dash(-hw+.18,true); dash(hw-.18,true);
-  // מדרכות אבן משתלבת עם אבן שפה אדום-לבן
-  const st=TEX.sidewalk(); st.repeat.set(L/5,1.6);
+  // מדרכות אבן משתלבת עם אבן שפה אדום-לבן (פתח בצומת לכביש החוצה)
+  const gap = G.signal? hw : 0;                       // פתח לרוחב הכביש החוצה
+  const segs = gap? [[-L/2,-gap],[gap,L/2]] : [[-L/2,L/2]];
   [-1,1].forEach(s=>{
-    const sw=new THREE.Mesh(GEO.plane,new THREE.MeshStandardMaterial({map:st,roughness:.92}));
-    sw.scale.set(L,5,1);
-    sw.rotation.x=-Math.PI/2; sw.position.set(0,.09,s*(hw+2.5)); sw.receiveShadow=true; p.add(sw);
-    const ct=TEX.curb(); ct.repeat.set(L/2.2,1);
-    const curb=new THREE.Mesh(GEO.box,new THREE.MeshStandardMaterial({map:ct,roughness:.9}));
-    curb.scale.set(L,.18,.28); curb.receiveShadow=true;
-    put(p,curb,0,.09,s*(hw+.12));
+    for(const [a,b] of segs){
+      const w=b-a, cx=(a+b)/2;
+      const st=TEX.sidewalk(); st.repeat.set(w/5,1.6);
+      const sw=new THREE.Mesh(GEO.plane,new THREE.MeshStandardMaterial({map:st,roughness:.92}));
+      sw.scale.set(w,5,1);
+      sw.rotation.x=-Math.PI/2; sw.position.set(cx,.09,s*(hw+2.5)); sw.receiveShadow=true; p.add(sw);
+      const ct=TEX.curb(); ct.repeat.set(w/2.2,1);
+      const curb=new THREE.Mesh(GEO.box,new THREE.MeshStandardMaterial({map:ct,roughness:.9}));
+      curb.scale.set(w,.18,.28); curb.receiveShadow=true;
+      put(p,curb,cx,.09,s*(hw+.12));
+    }
   });
   // קרקע כללית
   const gt=TEX.asphalt(); gt.repeat.set(30,30);
@@ -1179,7 +1184,7 @@ function clearWorld(){
   G.world=new THREE.Group(); G.dyn=new THREE.Group();
   G.scene.add(G.world); G.scene.add(G.dyn);
   G.peeps=[]; G.cars=[]; G.cops=[]; G.horses=[]; G.drivers=[]; G.bubbles=[]; G.fx=[];
-  G.cannon=null; G.train=null; G.selected.clear();
+  G.cannon=null; G.trains=[]; G.signal=null; G.signalLights=[]; G.selected.clear();
 }
 
 function buildMap(i){
@@ -1189,12 +1194,16 @@ function buildMap(i){
   G.roadHalfW = i===0? 3.7 : i===1? 7.2 : 6.0;
   G.sidewalkZ = G.roadHalfW+2.5;
   if(i===0){
-    G.laneDefs=[ {z:-1.8,dir:1,speed:map.speed}, {z:1.8,dir:-1,speed:map.speed} ];
+    // צומת אמיתי בן 4 כיוונים: כביש ראשי בציר x + כביש חוצה בציר z
+    // נסיעה בצד ימין בשני הצירים: +x שומר על z שלילי, +z שומר על x חיובי
+    G.laneDefs=[ {axis:'x',z:-1.8,dir:1,speed:map.speed}, {axis:'x',z:1.8,dir:-1,speed:map.speed},
+                 {axis:'z',x:1.8,dir:1,speed:map.speed,len:CROSS_LEN}, {axis:'z',x:-1.8,dir:-1,speed:map.speed,len:CROSS_LEN} ];
+    G.signal={i:-1,t:0,state:'',go:null};
   }else if(i===1){
     G.laneDefs=[ {z:-5.3,dir:1,speed:map.speed},{z:-1.8,dir:1,speed:map.speed*.9},
                  {z:1.8,dir:-1,speed:map.speed*.9},{z:5.3,dir:-1,speed:map.speed} ];
   }else{
-    G.laneDefs=[ {z:-3.6,dir:1,speed:map.speed}, {z:3.6,dir:-1,speed:map.speed} ];
+    G.laneDefs=[ {z:-5.0,dir:1,speed:map.speed}, {z:5.0,dir:-1,speed:map.speed} ];
   }
   mkRoadBase(G.world,map);
   // פנסי רחוב — תאורת נתרן כתומה
@@ -1209,36 +1218,82 @@ function buildMap(i){
   else buildGesher();
 }
 
-/* ---------- מפה 1: צומת בר אילן ---------- */
+/* ---------- מפה 1: צומת בר אילן (צומת אמיתי בן 4 כיוונים) ---------- */
+function mkSignalHead(p,x,z,ry,axis){
+  const g=new THREE.Group();
+  put(g,cyl(.12,5.2,0x3a3f44),0,2.6,0);
+  const head=bx(.5,1.4,.4,0x16181c); put(g,head,0,4.45,.35);
+  const cols=[0xff2a2a,0xffc02a,0x2aff5a];
+  const lamps=cols.map((cI,i)=>{
+    const lamp=new THREE.Mesh(GEO.cyl,new THREE.MeshLambertMaterial({color:cI,emissive:0x000000,emissiveIntensity:0}));
+    lamp.scale.set(.26,.1,.26); lamp.rotation.x=Math.PI/2;
+    put(g,lamp,0,4.95-i*.42,.57);
+    return lamp;
+  });
+  g.position.set(x,0,z); g.rotation.y=ry||0; p.add(g);
+  const h={lamps,axis,colors:cols};
+  G.signalLights.push(h);
+  return h;
+}
 function buildBarIlan(){
   const p=G.world, hw=G.roadHalfW;
-  // כביש צדדי — צומת T (דקורטיבי)
-  const side=texPlane(8,46,null); side.material=MAT(0x3f4146);
-  side.rotation.x=-Math.PI/2; side.position.set(14,.004,hw+23); side.receiveShadow=true; p.add(side);
-  for(let Z=hw+3;Z<hw+44;Z+=4){ const d=bx(.14,.015,2,0xf0f0f0); d.castShadow=false; put(p,d,14,.02,Z+1); }
-  mkCrosswalk(p,8,hw); mkCrosswalk(p,20,hw);
-  mkStopSign(p,18.6,hw+1.2,Math.PI);
-  mkTrafficLight(p,6.5,-hw-1,0);
-  mkTrafficLight(p,21.5,hw+1,Math.PI);
-  mkStreetSign(p,7,hw+1.4,'בר אילן',0);
-  mkStreetSign(p,20.8,hw+1.6,'שמגר',Math.PI/2);
-  mkStreetSign(p,-40,-hw-1.4,'בר אילן',Math.PI);
+  // ===== כביש חוצה בציר z (יוצר צומת + צלב) =====
+  const ch=CROSS_LEN/2;
+  const am=TEX.asphalt(); am.repeat.set(hw/4,CROSS_LEN/14);
+  const cross=new THREE.Mesh(GEO.plane,new THREE.MeshStandardMaterial({map:am,roughness:.96,metalness:0}));
+  cross.scale.set(hw*2,CROSS_LEN,1); cross.rotation.x=-Math.PI/2; cross.position.set(0,.006,0); cross.receiveShadow=true; p.add(cross);
+  // קווי נתיב על הכביש החוצה (לאורך z), פרט לריבוע הצומת
+  for(let Z=-ch;Z<ch;Z+=4){ if(Math.abs(Z)<hw+1) continue; const d=bx(.14,.015,2,0xcfc7a8); d.castShadow=false; put(p,d,0,.02,Z+1); }
+  // מדרכות + אבני שפה לאורך הכביש החוצה (פתח במפגש עם הכביש הראשי)
+  const zsegs=[[-ch,-hw],[hw,ch]];
+  [-1,1].forEach(s=>{
+    for(const [a,b] of zsegs){
+      const w=b-a, cz=(a+b)/2;
+      const sw=new THREE.Mesh(GEO.plane,new THREE.MeshStandardMaterial({map:TEX.sidewalk(),roughness:.92}));
+      sw.material.map.repeat.set(1.6,w/5);
+      sw.scale.set(5,w,1); sw.rotation.x=-Math.PI/2; sw.position.set(s*(hw+2.5),.085,cz); sw.receiveShadow=true; p.add(sw);
+      const curb=new THREE.Mesh(GEO.box,new THREE.MeshStandardMaterial({map:TEX.curb(),roughness:.9}));
+      curb.material.map.repeat.set(1,w/2.2);
+      curb.scale.set(.28,.18,w); curb.receiveShadow=true; put(p,curb,s*(hw+.12),.09,cz);
+    }
+  });
+  // מעברי חצייה בכל 4 הזרועות של הצומת
+  mkCrosswalk(p,-hw-1.2,hw); mkCrosswalk(p,hw+1.2,hw);     // על הכביש הראשי
+  mkCrosswalkZ(p,-hw-1.2,hw); mkCrosswalkZ(p,hw+1.2,hw);   // על הכביש החוצה
+  // ===== רמזורים מתחלפים ב-4 הפינות =====
+  // פונים לתנועת ציר-x (כביש ראשי)
+  mkSignalHead(p,-hw-1.4,-hw-1.4,Math.PI*0.25,'x');
+  mkSignalHead(p, hw+1.4, hw+1.4,Math.PI*1.25,'x');
+  // פונים לתנועת ציר-z (כביש חוצה)
+  mkSignalHead(p, hw+1.4,-hw-1.4,Math.PI*0.75,'z');
+  mkSignalHead(p,-hw-1.4, hw+1.4,Math.PI*1.75,'z');
+  // שילוט
+  mkStreetSign(p,-hw-3,hw+1.4,'בר אילן',0);
+  mkStreetSign(p,hw+1.6,hw+4,'שמגר',Math.PI/2);
   mkBusStop(p,-26,hw+1.8,Math.PI);
-  // חנויות בצד דרום
-  mkShop(p,-12,-hw-5.5,'פיצה כשר למהדרין','#b3221e',0);
-  mkShop(p,-4,-hw-5.5,'ספרי קודש — מסחרי','#14387f',0);
+  // חנויות בצד דרום (מחוץ למסדרון הצומת)
+  mkShop(p,-16,-hw-5.5,'פיצה כשר למהדרין','#b3221e',0);
   mkShop(p,30,-hw-5.5,'גמ"ח חסדי אבות','#1d7a46',0);
-  mkShop(p,38,-hw-5.5,'מכולת ברכת השם','#7a4b12',0);
-  // בנייני אבן — שתי שורות
-  const rowsS=[-26,-42,4,14,46,58,72], rowsN=[-58,-44,-30,-14,-2,30,42,56,70];
-  rowsS.forEach(X=>mkBuilding(p,X+rnd(-1,1),-hw-12-rnd(0,5),irnd(8,12),9,irnd(9,16),0));
-  rowsN.forEach(X=>{ if(Math.abs(X-14)>7) mkBuilding(p,X+rnd(-1,1),hw+12+rnd(0,5),irnd(8,12),9,irnd(9,16),Math.PI); });
-  // בניינים לאורך הכביש הצדדי
-  mkBuilding(p,5,hw+18,9,9,12,Math.PI/2*3); mkBuilding(p,24,hw+20,9,9,14,Math.PI/2);
-  // חוטי עירוב מעל
+  mkShop(p,40,-hw-5.5,'מכולת ברכת השם','#7a4b12',0);
+  // בנייני אבן — שתי שורות (מפנים מקום למסדרון הכביש החוצה |x|<hw+6)
+  const rowsS=[-42,-26,16,28,46,58,72], rowsN=[-58,-44,-30,-16,30,42,56,70];
+  const clear=hw+6;
+  rowsS.forEach(X=>{ if(Math.abs(X)>clear) mkBuilding(p,X+rnd(-1,1),-hw-12-rnd(0,5),irnd(8,12),9,irnd(9,16),0); });
+  rowsN.forEach(X=>{ if(Math.abs(X)>clear) mkBuilding(p,X+rnd(-1,1),hw+12+rnd(0,5),irnd(8,12),9,irnd(9,16),Math.PI); });
+  // בניינים לאורך הכביש החוצה (רחוק מהצומת)
+  mkBuilding(p,hw+14,30,9,9,12,Math.PI/2*3); mkBuilding(p,-hw-14,32,9,9,14,Math.PI/2);
+  mkBuilding(p,hw+14,-30,9,9,13,Math.PI/2*3); mkBuilding(p,-hw-14,-34,9,9,11,Math.PI/2);
+  // חוטי עירוב מעל הכביש הראשי
   mkEruv(p,-80,80,-hw-1.6);
   mkEruv(p,-80,80,hw+1.6);
-  G.alleys=[{x:-12,z:-hw-2},{x:30,z:-hw-2},{x:-26,z:hw+2},{x:14,z:hw+8}];
+  G.alleys=[{x:-16,z:-hw-2},{x:30,z:-hw-2},{x:-26,z:hw+2},{x:hw+2,z:30}];
+}
+// מעבר חצייה לאורך ציר z (חוצה את הכביש הראשי), z=מיקום הפס, halfW=חצי רוחב
+function mkCrosswalkZ(p,z,halfW){
+  for(let i=0;i<Math.floor(halfW*2/1.0);i++){
+    const s=bx(.55,.02,2.6,0xd9d3bc); s.castShadow=false;
+    put(p,s,-halfW+.6+i*1.0,.02,z);
+  }
 }
 
 /* ---------- מפה 2: כביש 4, בני ברק ---------- */
@@ -1287,21 +1342,28 @@ function buildKvish4(){
 /* ---------- מפה 3: גשר המיתרים ---------- */
 function buildGesher(){
   const p=G.world, hw=G.roadHalfW;
-  // מסילת רכבת קלה במרכז
-  [-1,1].forEach(s=>{
-    const rail=bx(G.roadLen,.05,.09,0xb8bcc2); rail.castShadow=false;
-    put(p,rail,0,.03,s*.72);
+  // ===== שתי מסילות רכבת קלה נפרדות (כיוון לכל מסילה) =====
+  [-TRACK_Z,TRACK_Z].forEach(tc=>{
+    // מצע המסילה
+    const bed=texPlane(G.roadLen,2.4,null); bed.material=MAT(0x55585e);
+    bed.rotation.x=-Math.PI/2; bed.position.set(0,.012,tc); bed.receiveShadow=true; p.add(bed);
+    // אדנים
+    for(let X=-95;X<95;X+=2.2){ const tie=bx(.25,.02,1.9,0x3a3c40); tie.castShadow=false; put(p,tie,X,.02,tc); }
+    // שני פסי הברזל של המסילה
+    [-1,1].forEach(s=>{
+      const rail=bx(G.roadLen,.05,.09,0xb8bcc2); rail.castShadow=false;
+      put(p,rail,0,.03,tc+s*.72);
+    });
+    // חוט החשמל העילי מעל המסילה
+    const wirePts=[]; for(let X=-90;X<=90;X+=10) wirePts.push(new THREE.Vector3(X,5.25,tc));
+    p.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(wirePts),new THREE.LineBasicMaterial({color:0x222222})));
   });
-  const bed=texPlane(G.roadLen,2.4,null); bed.material=MAT(0x55585e);
-  bed.rotation.x=-Math.PI/2; bed.position.y=.012; bed.receiveShadow=true; p.add(bed);
-  for(let X=-95;X<95;X+=2.2){ const tie=bx(.25,.02,1.9,0x3a3c40); tie.castShadow=false; put(p,tie,X,.02,0); }
-  // עמודי חשמל עילי למסילה
+  // ===== רווח קטן בין שתי המסילות + עמודי חשמל =====
+  const median=bx(G.roadLen,.05,.35,0x6b6e74); median.receiveShadow=true; put(p,median,0,.03,0);   // פס הפרדה דק ונמוך
   for(let X=-80;X<=80;X+=26){
-    put(p,cyl(.07,5.6,0x777c84),X,2.8,1.55);
-    const arm=cyl(.045,1.7,0x777c84); arm.rotation.x=Math.PI/2; put(p,arm,X,5.4,.7);
+    put(p,cyl(.08,5.6,0x777c84),X,2.8,0);                                                          // עמוד החשמל
+    const arm=cyl(.045,2*TRACK_Z+.6,0x777c84); arm.rotation.x=Math.PI/2; put(p,arm,X,5.4,0);       // זרוע שמחזיקה את שני החוטים
   }
-  const wirePts=[]; for(let X=-90;X<=90;X+=10) wirePts.push(new THREE.Vector3(X,5.25,0));
-  p.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(wirePts),new THREE.LineBasicMaterial({color:0x222222})));
   // מעקות הגשר הלבנים
   [-1,1].forEach(s=>{
     for(let X=-95;X<=95;X+=3) put(p,bx(.12,1.1,.12,0xf2f3f5),X,.62,s*(hw+.35));
@@ -1666,9 +1728,22 @@ function mkCarMesh(type){
 
 /* ---------------- ניהול תנועה ---------------- */
 function laneX(lane,s){ return lane.dir*s; }
+// תמיכה בשני צירים: נתיב ציר-x (כביש ראשי) או ציר-z (כביש חוצה) ליצירת צומת אמיתי
+const CROSS_LEN=96;
+function laneLen(lane){ return lane.len||G.roadLen; }
+function lanePos(lane,s){ return lane.axis==='z'? {x:lane.x, z:lane.dir*s} : {x:lane.dir*s, z:lane.z}; }
+function laneRotY(lane){ return lane.axis==='z'? (lane.dir===1?-Math.PI/2:Math.PI/2) : (lane.dir===1?0:Math.PI); }
+function laneAlong(lane,wx,wz){ return lane.dir*(lane.axis==='z'?wz:wx); }   // קואורדינטת התקדמות
+function laneCtrLat(lane){ return lane.axis==='z'? lane.x : lane.z; }         // מרכז הנתיב בציר הרוחב
+function laneFwd(lane){ return lane.axis==='z'? {x:0,z:lane.dir} : {x:lane.dir,z:0}; }   // וקטור כיוון נסיעה
+function laneSidePos(car){                                                    // מיקום לצד הרכב (שם עומד/חוזר הנהג)
+  const lane=car.lane, f=laneFwd(lane), sgn=(laneCtrLat(lane)>0?-1:1);
+  const sx=lane.axis==='z'?1:0, sz=lane.axis==='z'?0:1;                       // ציר הרוחב
+  return { x:car.obj.position.x - f.x*.8 + sx*sgn*1.4, z:car.obj.position.z - f.z*.8 + sz*sgn*1.4 };
+}
 function spawnCar(lane){
   if(G.cars.length>=MAXCARS) return;
-  const L=G.roadLen;
+  const L=laneLen(lane);
   // אל תיכנס אם הכניסה חסומה
   for(const c of G.cars) if(c.lane===lane && c.s < -L/2+14) return;
   const type=Math.random()<.11?'taxi':Math.random()<.08?'bus':Math.random()<.1?'pickup'
@@ -1679,7 +1754,7 @@ function spawnCar(lane){
   const car={obj:g,lane,s:-L/2-rnd(2,8),v:lane.speed*rnd(.85,1),len:g.userData.len,
     maxSpeed:lane.speed*rnd(.9,1.05),type,stoppedTime:0,honkT:rnd(2,6),driver:null,plateTex,attached:[]};
   g.userData.car=car;          // קישור לראיקאסט — פקודת "להיצמד לרכב"
-  g.rotation.y=lane.dir===1? 0 : Math.PI;
+  g.rotation.y=laneRotY(lane);
   G.cars.push(car); G.dyn.add(g);
   return car;
 }
@@ -1692,19 +1767,43 @@ function removeCar(car){
 }
 // סריקת מכשול: רכב מוביל או מפגין על הנתיב
 function laneObstacle(car){
-  const lane=car.lane, front=car.s+car.len/2;
+  const lane=car.lane, front=car.s+car.len/2, ax=lane.axis||'x';
+  const ctr=laneCtrLat(lane);
   let gap=Infinity, peepHit=null;
-  for(const c of G.cars){
-    if(c===car||c.lane!==lane) continue;
-    const d=(c.s-c.len/2)-front;
-    if(d>-1&&d<gap) gap=d;
+  // רכבים: מעקב באותו נתיב + הימנעות כללית מהתנגשות (כולל רכב מצטלב בתוך הצומת)
+  for(const o of G.cars){
+    if(o===car) continue;
+    if(o.lane===lane){                                  // אותו נתיב — מעקב רגיל
+      const d=(o.s-o.len/2)-front;
+      if(d>-1&&d<gap) gap=d;
+    }else{                                              // רכב אחר — היטל מיקומו על ציר הנסיעה שלנו
+      // פינוי תקיעה: מדלגים על רכב ניצב שתקוע *שלא* בגלל מפגינים (תנועה/הינעלות צולבת).
+      // רכב שתקוע בגלל מפגינים ('protest') לא מדלגים עליו — אסור לעבור דרך חסימת המפגינים.
+      if((o.lane.axis||'x')!==ax && G._stopClass && G._stopClass.get(o)==='red') continue;
+      const along=laneAlong(lane,o.obj.position.x,o.obj.position.z);
+      const lat=(ax==='z'? o.obj.position.x : o.obj.position.z);
+      const sameAx=(o.lane.axis||'x')===ax;
+      const oHalfLat  = sameAx? (o.obj.userData.halfW||1.1) : o.len/2;
+      const oHalfAlong= sameAx? o.len/2 : (o.obj.userData.halfW||1.1);
+      if(Math.abs(lat-ctr) > 1.0+oHalfLat) continue;    // לא נמצא במסלול שלנו
+      const d=(along-oHalfAlong)-front;
+      if(d>-1&&d<gap) gap=d;                             // נבלם לפניו — אפשר להיתקע גם בתוך הצומת
+    }
   }
+  // מפגינים על הנתיב
   for(const p of G.peeps){
     if(!p.onRoad()) continue;
-    if(Math.abs(p.obj.position.z-lane.z)>1.5) continue;
-    const ps=lane.dir*p.obj.position.x;
+    const lat=ax==='z'? p.obj.position.x : p.obj.position.z;
+    if(Math.abs(lat-ctr)>1.5) continue;
+    const ps=laneAlong(lane,p.obj.position.x,p.obj.position.z);
     const d=ps-.45-front;
     if(d>-2&&d<gap){ gap=d; peepHit=p; }
+  }
+  // רמזור הצומת: באדום עוצרים בקו העצירה. בירוק מותר להיכנס לצומת בחופשיות —
+  // תקיעות והינעלות בין רכבים הן חלק מההפגנה; השחרור מגיע ממנגנון הפינוי (draining).
+  if(G.signal && G.signal.go!==ax){
+    const stop=-G.roadHalfW-1.4;
+    if(front<stop){ const d=stop-front; if(d<gap) gap=d; }
   }
   return {gap,peepHit};
 }
@@ -1730,7 +1829,7 @@ function updateCarKinematics(car,dt,brake){
     if(car.honkT<0){ if(Math.random()<.6) AUDIO.horn(); car.honkT=rnd(3,9); }
   } else car.stoppedTime=0;
   const lane=car.lane;
-  car.obj.position.set(laneX(lane,car.s),0,lane.z);
+  const wp=lanePos(lane,car.s); car.obj.position.set(wp.x,0,wp.z);
   // ==== אנימציה פיזית ====
   const ud=car.obj.userData;
   if(ud.wheels){ const dth=car.v*dt/.33; for(const wm of ud.wheels) wm.rotation.y-=dth; }
@@ -1746,12 +1845,16 @@ function updateCarKinematics(car,dt,brake){
   // עשן אגזוז ברכב עומד
   car.exT=(car.exT??rnd(0,2))-dt;
   if(car.exT<=0&&car.v<.5&&G.fx.length<130){
-    smokeFx(car.obj.position.x-lane.dir*(car.len/2+.3),.4,car.obj.position.z+.5);
+    const rp=lanePos(lane,car.s-(car.len/2+.3));
+    smokeFx(rp.x,.4,rp.z+.5);
     car.exT=rnd(1.4,3);
   }
 }
 function updateTraffic(dt){
-  const L=G.roadLen;
+  updateSignal(dt);
+  // סיווג סיבת העצירה של כל רכב פעם אחת בפריים (משמש לפינוי תקיעות שאינן נובעות ממפגינים)
+  G._stopClass=new Map();
+  for(const c of G.cars) classifyStop(c,G._stopClass);
   // ספאון
   G.laneDefs.forEach((lane,i)=>{
     G.spawnTimers[i]=(G.spawnTimers[i]||rnd(1,3))-dt;
@@ -1760,55 +1863,169 @@ function updateTraffic(dt){
   for(let i=G.cars.length-1;i>=0;i--){
     const car=G.cars[i];
     updateCarKinematics(car,dt,BRAKE);
-    if(car.s>L/2+10) removeCar(car);
+    if(car.s>laneLen(car.lane)/2+10) removeCar(car);
   }
   updateTrain(dt);
 }
+/* ---------------- רמזור צומת (מפה 1) ---------------- */
+const SIGNAL_SEQ=[['x',8],['xy',2],['none',1.2],['z',8],['zy',2],['none',1.2]];
+function setSignalHead(h,state){
+  const idx=state==='red'?0:state==='yellow'?1:2;
+  h.lamps.forEach((l,i)=>{ const on=i===idx; l.material.emissive.setHex(on?h.colors[i]:0x000000); l.material.emissiveIntensity=on?1:0; });
+}
+function applySignalLights(){
+  const st=G.signal.state;
+  for(const h of G.signalLights){
+    let s='red';
+    if(st==='x')  s=h.axis==='x'?'green':'red';
+    else if(st==='xy') s=h.axis==='x'?'yellow':'red';
+    else if(st==='z')  s=h.axis==='z'?'green':'red';
+    else if(st==='zy') s=h.axis==='z'?'yellow':'red';
+    setSignalHead(h,s);
+  }
+}
+function updateSignal(dt){
+  const s=G.signal; if(!s) return;
+  s.t-=dt;
+  if(s.t<=0){
+    s.i=(s.i+1)%SIGNAL_SEQ.length;
+    s.state=SIGNAL_SEQ[s.i][0]; s.t=SIGNAL_SEQ[s.i][1];
+    s.go = s.state==='x'?'x' : s.state==='z'?'z' : null;
+    applySignalLights();
+  }
+}
+// סיווג סיבת העצירה של רכב: 'red' (ממתין ברמזור — לא הפגנה) / 'protest' (נחסם ע"י מפגין או רכב תקוע) / 'flow'
+function classifyStop(c,memo){
+  if(c.v>=.3) return 'flow';
+  if(memo.has(c)) return memo.get(c);
+  memo.set(c,'red');                                        // ערך זמני לשבירת לולאות (שמרני — לא מנפח פקק)
+  if(c.attached.length>0 || (c.driver&&c.driver.outOfCar)){ memo.set(c,'protest'); return 'protest'; }
+  const lane=c.lane, front=c.s+c.len/2, ax=lane.axis||'x', ctr=laneCtrLat(lane);
+  // כשממתינים באדום בכניסה לצומת — מתעלמים ממכשולים שמעבר לקו העצירה (בתוך הצומת).
+  // רק מכשול שלפני קו העצירה (על הזרוע שלנו) באמת חוסם אותנו; אחרת זו פשוט המתנה ברמזור.
+  const stop=-G.roadHalfW-1.4;
+  const redApproach = G.signal && G.signal.go!==ax && front<stop;
+  const maxAlong = redApproach? stop : Infinity;
+  let best=Infinity, kind='none', blockCar=null;
+  // מפגין לפניו
+  for(const p of G.peeps){
+    if(!p.onRoad()) continue;
+    const lat=ax==='z'?p.obj.position.x:p.obj.position.z;
+    if(Math.abs(lat-ctr)>1.5) continue;
+    const along=laneAlong(lane,p.obj.position.x,p.obj.position.z);
+    if(along>=maxAlong) continue;
+    const d=along-.45-front;
+    if(d>-2&&d<best){ best=d; kind='peep'; blockCar=null; }
+  }
+  // רכב לפניו (אותו נתיב או מצטלב)
+  for(const o of G.cars){
+    if(o===c) continue;
+    let d, along;
+    if(o.lane===lane){ along=o.s-o.len/2; d=along-front; }
+    else{
+      along=laneAlong(lane,o.obj.position.x,o.obj.position.z);
+      const lat=(ax==='z'?o.obj.position.x:o.obj.position.z);
+      const sameAx=(o.lane.axis||'x')===ax;
+      const oHalfLat  = sameAx?(o.obj.userData.halfW||1.1):o.len/2;
+      const oHalfAlong= sameAx?o.len/2:(o.obj.userData.halfW||1.1);
+      if(Math.abs(lat-ctr)>1.0+oHalfLat) continue;
+      along-=oHalfAlong; d=along-front;
+    }
+    if(along>=maxAlong) continue;
+    if(d>-1&&d<best){ best=d; kind='car'; blockCar=o; }
+  }
+  // קו עצירה ברמזור
+  if(redApproach){ const d=stop-front; if(d<best){ best=d; kind='red'; blockCar=null; } }
+  let res;
+  if(kind==='peep') res='protest';
+  else if(kind==='red') res='red';
+  else if(kind==='car') res=classifyStop(blockCar,memo);     // עוקב אחרי הרכב שלפניו — נחשב כמוהו
+  else res='protest';                                        // עצור ללא סיבת רמזור ברורה — חלק מהפקק
+  memo.set(c,res);
+  return res;
+}
 function countStopped(){
-  let n=0;
-  for(const c of G.cars) if(c.v<.3 && Math.abs(c.obj.position.x)<G.roadLen/2) n++;
+  let n=0; const memo=new Map();
+  for(const c of G.cars){
+    if(c.v>=.3 || Math.abs(c.obj.position.x)>=G.roadLen/2) continue;
+    // ממתין ברמזור (ישירות או בתור מאחורי רכבים שממתינים) — לא נחשב הפגנה
+    if(classifyStop(c,memo)==='protest') n++;
+  }
   return n;
 }
 
-/* ---------------- רכבת קלה (מפה 3) ---------------- */
+/* ---------------- רכבת קלה דו־כיוונית (מפה 3) ---------------- */
+const TRAIN_MAX_V=13, TRAIN_LEN=23, TRAIN_BRAKE=2.6, TRAIN_MAXCOUNT=6, TRACK_Z=1.5;
+function spawnTrain(dir){
+  // dir=+1 נכנסת משמאל ונוסעת ימינה, dir=-1 נכנסת מימין ונוסעת שמאלה
+  const z=dir>0?-TRACK_Z:TRACK_Z;                        // כל כיוון על מסילה נפרדת משלו
+  const startS=dir>0?-G.roadLen/2-26:G.roadLen/2+26;
+  // לא להוליד אם כבר עומדת רכבת קרובה לנקודת הכניסה (כדי שיצטברו לפקק ולא יתחפפו)
+  for(const o of G.trains){ if(o.dir===dir && Math.abs(o.s-startS)<TRAIN_LEN+8) return false; }
+  const g=mkCarMesh('tram');
+  if(dir<0) g.rotation.y=Math.PI;
+  const t={obj:g,s:startS,z,v:TRAIN_MAX_V,dir,len:TRAIN_LEN,blocked:false};
+  g.position.set(t.s,0,t.z);
+  G.trains.push(t); G.dyn.add(g);
+  return true;
+}
 function updateTrain(dt){
-  if(G.stage!==2) return;
-  if(!G.train){
-    G.trainTimer=(G.trainTimer??14)-dt;
-    if(G.trainTimer<=0){
-      const g=mkCarMesh('tram');
-      G.train={obj:g,s:-G.roadLen/2-26,v:13,len:23,blocked:false,bonusGiven:false};
-      G.dyn.add(g);
-    }
+  if(G.stage!==2){
+    if(G.trains.length){ for(const t of G.trains) G.dyn.remove(t.obj); G.trains.length=0; $('trainBonus').style.display='none'; }
     return;
   }
-  const t=G.train, front=t.s+t.len/2;
-  let gap=Infinity, peepHit=null;
-  for(const p of G.peeps){
-    if(!p.onRoad()) continue;
-    if(Math.abs(p.obj.position.z)>1.6) continue;        // מסדרון המסילה
-    const d=p.obj.position.x-.45-front;
-    if(d>-2&&d<gap){ gap=d; peepHit=p; }
+  // טיימר הולדה — מזמן רכבות חדשות מכיוון אקראי, עד תקרה. רכבות נוספות מצטברות ונתקעות בפקק
+  G.trainTimer=(G.trainTimer??18)-dt;
+  if(G.trainTimer<=0){
+    if(G.trains.length<TRAIN_MAXCOUNT) spawnTrain(Math.random()<.5?1:-1);
+    G.trainTimer=rnd(14,28);
   }
-  const brake=2.6, margin=2;
-  if(gap===Infinity) t.v=Math.min(t.v+1.5*dt,13);
-  else{
-    const d=gap-margin;
-    if(d<=0) t.v=Math.max(0,t.v-brake*2*dt);
-    else t.v=Math.min(t.v+1.5*dt,13,Math.sqrt(2*brake*Math.max(0,d)));
+  let anyBlocked=false;
+  for(const t of G.trains){
+    const dir=t.dir, nose=t.s+dir*t.len/2;
+    let gap=Infinity, peepHit=null;
+    // מפגינים על מסדרון המסילה
+    for(const p of G.peeps){
+      if(!p.onRoad()) continue;
+      if(Math.abs(p.obj.position.z-t.z)>1.6) continue;
+      const d=dir*(p.obj.position.x-nose)-.45;
+      if(d>-2&&d<gap){ gap=d; peepHit=p; }
+    }
+    // רכבות אחרות לפנים (מאותו כיוון מאחור, או כיוון נגדי על אותה מסילה) — יוצר פקק רכבות
+    for(const o of G.trains){
+      if(o===t) continue;
+      if(Math.abs(o.z-t.z)>1.0) continue;               // רק אם חולקות מסילה
+      const ahead=dir*(o.s-t.s);
+      if(ahead<=0) continue;                            // רק מי שלפנים
+      const d=ahead-(t.len+o.len)/2;
+      if(d<gap){ gap=d; peepHit=null; }
+    }
+    const margin=2;
+    if(gap===Infinity) t.v=Math.min(t.v+1.5*dt,TRAIN_MAX_V);
+    else{
+      const d=gap-margin;
+      if(d<=0) t.v=Math.max(0,t.v-TRAIN_BRAKE*2*dt);
+      else t.v=Math.min(t.v+1.5*dt,TRAIN_MAX_V,Math.sqrt(2*TRAIN_BRAKE*Math.max(0,d)));
+    }
+    t.s+=dir*t.v*dt;
+    if(peepHit && gap<.6 && t.v>2) runOver(peepHit,null);
+    const wasBlocked=t.blocked;
+    t.blocked=(t.v<.2 && gap<25);
+    if(t.blocked&&!wasBlocked){
+      newsFlash('🚋 דרמה: הרכבת הקלה נעצרה על גשר המיתרים! בונוס ענק!');
+      AUDIO.ding();
+    }
+    if(t.blocked) anyBlocked=true;
+    t.obj.position.set(t.s,0,t.z);
   }
-  t.s+=t.v*dt;
-  if(peepHit && gap<.6 && t.v>2) runOver(peepHit,null);
-  const wasBlocked=t.blocked;
-  t.blocked=(t.v<.2 && gap<25);
-  if(t.blocked&&!wasBlocked){
-    $('trainBonus').style.display='block';
-    newsFlash('🚋 דרמה: הרכבת הקלה נעצרה על גשר המיתרים! בונוס ענק!');
-    AUDIO.ding();
+  $('trainBonus').style.display=anyBlocked?'block':'none';
+  // הסרת רכבות שיצאו מהגשר
+  for(let i=G.trains.length-1;i>=0;i--){
+    const t=G.trains[i];
+    if((t.dir>0&&t.s>G.roadLen/2+30)||(t.dir<0&&t.s<-G.roadLen/2-30)){
+      G.dyn.remove(t.obj); G.trains.splice(i,1);
+    }
   }
-  if(!t.blocked) $('trainBonus').style.display='none';
-  t.obj.position.set(t.s,0,0);
-  if(t.s>G.roadLen/2+30){ G.dyn.remove(t.obj); G.train=null; G.trainTimer=rnd(30,50); $('trainBonus').style.display='none'; }
 }
 
 /* ---------------- דריסה (לא גרפי, מינוס נקודות) ---------------- */
@@ -2011,7 +2228,10 @@ function mkPeep(typeKey,x,z){
     state:'idle', target:null, phase:rnd(0,6), ring,
     recoverT:0, attachCar:null, dragger:null, hitT:0, stain:0,
     shoutT:0, argueT:0, argueCD:0, helpT:0,
-    onRoad(){ const p=this.obj.position; return Math.abs(p.z)<G.roadHalfW-.2 && Math.abs(p.x)<G.roadLen/2; },
+    onRoad(){ const p=this.obj.position;
+      const onMain = Math.abs(p.z)<G.roadHalfW-.2 && Math.abs(p.x)<G.roadLen/2;
+      const onCross = G.signal && Math.abs(p.x)<G.roadHalfW-.2 && Math.abs(p.z)<CROSS_LEN/2;  // הכביש החוצה בצומת
+      return onMain||onCross; },
     selectable(){ return !['dragged','recover','flee','hit'].includes(this.state); }
   };
   root.userData.peep=peep;
@@ -2239,6 +2459,16 @@ function updateFx(dt){
 const MAXPEEPS=80;
 const SLOGANS=['גיוס שמד!','לא נתגייס!','עד מוות!','התורה קודמת!'];
 function sidewalkZ(z){ return (z>=0?1:-1)*(G.roadHalfW+3); }
+// יעד גרירה — נקודת מדרכה שמפנה את המפגין מהכביש (כולל הכביש החוצה בצומת)
+function dragTarget(x,z){
+  const hw=G.roadHalfW, m=hw+3;
+  if(!G.signal) return {x, z:(z>=0?1:-1)*m};                  // מפות רגילות — מדרכת הכביש הראשי
+  const sx=(x>=0?1:-1)*m, sz=(z>=0?1:-1)*m;
+  const inCross=Math.abs(x)<hw, inMain=Math.abs(z)<hw;
+  if(inMain && !inCross) return {x, z:sz};                    // רק על הכביש הראשי → יציאה בציר z
+  if(inCross && !inMain) return {x:sx, z};                    // רק על הכביש החוצה → יציאה בציר x
+  return {x:sx, z:sz};                                        // בתוך הצומת → יציאה לפינה
+}
 function detach(p){
   if(p.attachCar){ const a=p.attachCar.attached; const i=a.indexOf(p); if(i>=0)a.splice(i,1); p.attachCar=null; }
   p.dragger=null;
@@ -2355,8 +2585,8 @@ function friendsNear(peep,r){
 }
 function spawnDriver(car){
   const fig=mkDriverFig();
-  const sideZ=car.lane.z>0? -1:1;
-  fig.root.position.set(car.obj.position.x-car.lane.dir*.8, 0, car.lane.z+sideZ*1.4);
+  const sp=laneSidePos(car);
+  fig.root.position.set(sp.x, 0, sp.z);
   G.dyn.add(fig.root);
   const d={fig,obj:fig.root,parts:fig.parts,car,state:'walk',t:0,phase:0,target:null,
     outOfCar:true,shoutT:0,pushP:null};
@@ -2377,10 +2607,12 @@ function moveFig(d,tx,tz,speed,dt){
   return false;
 }
 function updateDrivers(dt,now){
-  // יציאת נהגים מרכבים תקועים
+  // יציאת נהגים — רק מרכבים שתקועים בגלל ההפגנה (לא ממתינים סתם ברמזור)
   if(G.drivers.length<6){
+    const memo=new Map();
     for(const car of G.cars){
-      if(car.stoppedTime>7 && !car.driver && Math.random()<dt*.25 && car.type!=='bus'){
+      if(car.stoppedTime>7 && !car.driver && Math.random()<dt*.25 && car.type!=='bus'
+         && classifyStop(car,memo)==='protest'){
         // רק אם באמת יש מפגין חוסם בקרבת מקום
         let found=null,best=144;
         for(const p of G.peeps){ if(!p.onRoad())continue;
@@ -2393,7 +2625,8 @@ function updateDrivers(dt,now){
   for(let i=G.drivers.length-1;i>=0;i--){
     const d=G.drivers[i]; d.t+=dt;
     let mode='idle';
-    const front={x:d.car.obj.position.x+d.car.lane.dir*(d.car.len/2+1),z:d.car.lane.z};
+    const _f=laneFwd(d.car.lane);
+    const front={x:d.car.obj.position.x+_f.x*(d.car.len/2+1),z:d.car.obj.position.z+_f.z*(d.car.len/2+1)};
     switch(d.state){
       case 'walk':
         mode='walk';
@@ -2440,19 +2673,20 @@ function updateDrivers(dt,now){
           say(d.obj,'אוי לא...',1.6); p.state='blocking'; d.pushP=null; d.state='return';
           break;
         }
-        const tz=sidewalkZ(p.obj.position.z);
-        p.obj.position.z+=Math.sign(tz-p.obj.position.z)*.55*dt;
-        d.obj.position.set(p.obj.position.x+.5,0,p.obj.position.z-Math.sign(tz)*0.7);
+        const tg=dragTarget(p.obj.position.x,p.obj.position.z);
+        const px=tg.x-p.obj.position.x, pz=tg.z-p.obj.position.z, pl=Math.hypot(px,pz)||1;
+        p.obj.position.x+=px/pl*.55*dt; p.obj.position.z+=pz/pl*.55*dt;
+        d.obj.position.set(p.obj.position.x-px/pl*.7,0,p.obj.position.z-pz/pl*.7);
         d.phase+=dt*2; p.phase+=dt*2;
-        if(Math.abs(p.obj.position.z)>G.roadHalfW+1){
+        if(!p.onRoad()){
           p.state='idle'; p.target=null; d.pushP=null; d.state='return';
         }
         break;}
-      case 'return':
+      case 'return':{
         mode='walk';
-        if(moveFig(d,d.car.obj.position.x-d.car.lane.dir*.8,d.car.lane.z+(d.car.lane.z>0?-1.4:1.4),3,dt)
-           || d.t>30){ removeDriver(d); continue; }
-        break;
+        const sp=laneSidePos(d.car);
+        if(moveFig(d,sp.x,sp.z,3,dt) || d.t>30){ removeDriver(d); continue; }
+        break;}
     }
     if(d.car.v>1||!G.cars.includes(d.car)){ removeDriver(d); continue; }
     animHumanoid(d.parts,mode,d.phase,now);
@@ -2555,6 +2789,7 @@ function updateCops(dt,now){
         if(cop.grabT<=0){
           p.state='dragged'; p.dragger=cop; detachFromLie(p);
           G.selected.delete(p);
+          cop.dragTo=dragTarget(p.obj.position.x,p.obj.position.z);   // ננעל יעד פינוי מחוץ לכביש
           cop.state='drag';
         }
         break;}
@@ -2562,11 +2797,13 @@ function updateCops(dt,now){
         const p=cop.target;
         if(!p||!G.peeps.includes(p)){ cop.target=null; cop.state='seek'; break; }
         mode='walk';
-        const tz=sidewalkZ(cop.obj.position.z||1);
-        const done=moveFig(cop,cop.obj.position.x,tz+Math.sign(tz)*1.2,1.3,dt);
-        p.obj.position.set(cop.obj.position.x-.4,0,cop.obj.position.z-.6*Math.sign(tz));
+        const tg=cop.dragTo||dragTarget(cop.obj.position.x,cop.obj.position.z);
+        const done=moveFig(cop,tg.x,tg.z,1.3,dt);
+        // המפגין נגרר מאחורי השוטר בכיוון התנועה
+        const dx=tg.x-cop.obj.position.x, dz=tg.z-cop.obj.position.z, dl=Math.hypot(dx,dz)||1;
+        p.obj.position.set(cop.obj.position.x-dx/dl*.6,0,cop.obj.position.z-dz/dl*.6);
         p.phase+=dt*2;
-        if(done||Math.abs(cop.obj.position.z)>G.roadHalfW+2.2){
+        if(done||!p.onRoad()){                       // הושלם הפינוי כשהמפגין כבר לא על הכביש
           p.state='recover'; p.recoverT=10; p.dragger=null; p.copLock=null;
           say(p.obj,pick(['עוד נשוב!','זה לא נגמר!']),2);
           cop.target=null; cop.state='seek';
@@ -2583,21 +2820,32 @@ function detachFromLie(p){ detach(p); }
    ========================================================================= */
 function spawnHorses(){
   newsFlash('🔴 פרשי משטרה נכנסים לזירת ההפגנה');
-  for(let k=0;k<3;k++){
+  const xLanes=G.laneDefs.filter(l=>(l.axis||'x')==='x');
+  const zLanes=G.laneDefs.filter(l=>l.axis==='z');
+  const add=(axis,lane,k)=>{
     const h=mkHorse();
-    h.root.position.set(-G.roadLen/2-12-k*8,0,G.laneDefs[k%G.laneDefs.length].z);
+    if(axis==='z') h.root.position.set(lane.x,0,-CROSS_LEN/2-12-k*8);
+    else h.root.position.set(-G.roadLen/2-12-k*8,0,lane.z);
     G.dyn.add(h.root);
-    G.horses.push({...h,obj:h.root,dir:1,phase:rnd(0,6),frozenT:0,waitT:0});
-  }
+    G.horses.push({...h,obj:h.root,axis,dir:1,phase:rnd(0,6),frozenT:0,waitT:0});
+  };
+  for(let k=0;k<3;k++) add('x',xLanes[k%xLanes.length],k);
+  if(G.signal && zLanes.length) for(let k=0;k<2;k++) add('z',zLanes[k%zLanes.length],k);  // פרשים גם בכביש החוצה
 }
 function updateHorses(dt,now){
   for(const h of G.horses){
     if(h.frozenT>0){ h.frozenT-=dt; continue; }
     if(h.waitT>0){ h.waitT-=dt; continue; }
-    const sp=8.5;
-    h.obj.position.x+=h.dir*sp*dt;
-    h.obj.position.z=Math.sin(h.obj.position.x*.06+h.phase)*Math.max(.5,G.roadHalfW-1.6);
-    h.obj.rotation.y=h.dir>0?Math.PI/2:-Math.PI/2;
+    const sp=8.5, ax=h.axis||'x', wob=Math.max(.5,G.roadHalfW-1.6);
+    if(ax==='z'){
+      h.obj.position.z+=h.dir*sp*dt;
+      h.obj.position.x=Math.sin(h.obj.position.z*.06+h.phase)*wob;
+      h.obj.rotation.y=h.dir>0?0:Math.PI;
+    }else{
+      h.obj.position.x+=h.dir*sp*dt;
+      h.obj.position.z=Math.sin(h.obj.position.x*.06+h.phase)*wob;
+      h.obj.rotation.y=h.dir>0?Math.PI/2:-Math.PI/2;
+    }
     h.phase+=dt*9;
     h.legs.forEach((leg,i)=>{
       const sw=Math.sin(h.phase+i*1.7);
@@ -2606,16 +2854,18 @@ function updateHorses(dt,now){
     });
     h.obj.position.y=Math.abs(Math.sin(h.phase*.5))*.12;
     h.tail.rotation.x=.5+Math.sin(h.phase)*.2;
-    const lim=G.roadLen/2-4;   // היפוך כיוון רק כשמגיעים לקצה בכיוון הנסיעה (לא בלידה מחוץ למסך)
-    if(h.dir>0 && h.obj.position.x>lim){ h.dir=-1; h.waitT=rnd(1,3); }
-    else if(h.dir<0 && h.obj.position.x<-lim){ h.dir=1; h.waitT=rnd(1,3); }
+    const lim=(ax==='z'? CROSS_LEN/2 : G.roadLen/2)-4;
+    const coord=ax==='z'? h.obj.position.z : h.obj.position.x;
+    if(h.dir>0 && coord>lim){ h.dir=-1; h.waitT=rnd(1,3); }
+    else if(h.dir<0 && coord<-lim){ h.dir=1; h.waitT=rnd(1,3); }
     // AI פחד — עומדים בורחים, שוכבים וצמודים לא מושפעים
     for(const p of G.peeps){
       if(!['blocking','moving','idle','helping'].includes(p.state)) continue;
       if(!p.onRoad()) continue;
       if(dist2(p.obj.position.x,p.obj.position.z,h.obj.position.x,h.obj.position.z)<36){
         p.state='panic'; p.attachPending=null;
-        p.target={x:p.obj.position.x+rnd(-3,3),z:sidewalkZ(p.obj.position.z)+Math.sign(p.obj.position.z||1)*rnd(0,2)};
+        const tg=dragTarget(p.obj.position.x,p.obj.position.z);   // בורח אל מחוץ לכביש (כולל הכביש החוצה)
+        p.target={x:tg.x+rnd(-1.5,1.5),z:tg.z+rnd(-1.5,1.5)};
         if(Math.random()<.4) say(p.obj,pick(['אִיייי!','סוס!!','שמע ישראל!']),1.6);
       }
     }
@@ -2683,14 +2933,33 @@ function updateCannon(dt,now){
     if(c.refillT<=0){ c.tank=25; toast('המיכל התמלא — המכת"זית חוזרת לפעולה!','bad'); }
     updateTankHUD(); return;
   }
-  // בחירת מטרה — המפגין הקרוב ביותר על הכביש
-  let best=1e9,t=null;
+  // בחירת מטרה — המפגין הקרוב ביותר על הכביש + מרכז ההתקהלות
+  let best=1e9,t=null, cx=0, cz=0, n=0;
   for(const p of G.peeps){
     if(!p.onRoad()||p.state==='hit'||p.state==='flee') continue;
+    cx+=p.obj.position.x; cz+=p.obj.position.z; n++;
     const dd=dist2(p.obj.position.x,p.obj.position.z,c.obj.position.x,c.obj.position.z);
     if(dd<best){best=dd;t=p;}
   }
-  if(!t||best>3600){ c.pts.visible=false; AUDIO.spray(false); return; }
+  if(!t){ c.pts.visible=false; AUDIO.spray(false); return; }
+  // אם המפגינים התרכזו רחוק מטווח הריסוס — המכת"זית נוסעת לעברם (גם אל הכביש החוצה)
+  const inRange = best<=1600;                       // טווח ריסוס נוח (~40 מ')
+  if(!inRange){
+    const ce={x:cx/n, z:cz/n};
+    const vx=ce.x-c.obj.position.x, vz=ce.z-c.obj.position.z, vl=Math.hypot(vx,vz)||1;
+    const stand=18;                                 // עוצרת כ-18 מ' מהמוקד
+    let wx=ce.x-vx/vl*stand, wz=ce.z-vz/vl*stand;
+    wx=clamp(wx,-G.roadLen/2+8,G.roadLen/2+25);
+    wz=G.signal? clamp(wz,-CROSS_LEN/2+8,CROSS_LEN/2-8) : clamp(wz,-G.roadHalfW,G.roadHalfW);
+    const dx=wx-c.obj.position.x, dz=wz-c.obj.position.z, dl=Math.hypot(dx,dz);
+    if(dl>1){
+      const step=Math.min(7.5*dt,dl);
+      c.obj.position.x+=dx/dl*step; c.obj.position.z+=dz/dl*step;
+      c.obj.rotation.y=Math.atan2(-dz,dx);          // פני הרכב לכיוון הנסיעה
+    }
+    c.pts.visible=false; AUDIO.spray(false);
+    return;                                          // בזמן נסיעה לא מרססת
+  }
   // ריסוס!
   c.tank-=dt; c.sprayLvlT+=dt;
   if(c.tank<=0){ c.refillT=15; toast('המיכל ריק! 15 שניות — חלון זהב לחזור לכביש!','good'); AUDIO.ding(); updateTankHUD(); return; }
@@ -2794,7 +3063,10 @@ const WAVES=[
 ];
 function updateWaves(dt){
   if(G.bagT>0) G.bagT-=dt;   // טיימר הגנת שקיות הניילון
-  if(countStopped()>0||G.peeps.some(p=>p.onRoad())){ G.escTime+=dt; G.protestStarted=true; }
+  // ההפגנה מתחילה רק כשהמפגינים בפועל על הכביש — לא מעצירה רגילה ברמזור הצומת
+  const onRoadNow=G.peeps.some(p=>p.onRoad());
+  if(onRoadNow) G.protestStarted=true;
+  if(onRoadNow || (G.protestStarted && countStopped()>0)){ G.escTime+=dt; }
   G.totalBlockTime=G.escTime;
   let w=0;
   for(let i=0;i<WAVES.length;i++) if(G.escTime>=WAVES[i].t) w=i+1;
@@ -2941,13 +3213,15 @@ function pickCar(cx,cy){
 function dangerAt(x,z){
   for(const c of G.cars){
     const lane=c.lane;
-    if(Math.abs(z-lane.z)>1.7) continue;
-    const d=lane.dir*x-(c.s+c.len/2);
+    const lat=lane.axis==='z'? x : z;
+    if(Math.abs(lat-laneCtrLat(lane))>1.7) continue;
+    const d=laneAlong(lane,x,z)-(c.s+c.len/2);
     if(d>-1 && d < c.v*c.v/(2*BRAKE)+4) { if(c.v>1) return true; }
   }
-  if(G.train&&Math.abs(z)<1.7){
-    const d=x-(G.train.s+G.train.len/2);
-    if(d>-1 && d<G.train.v*G.train.v/(2*2.6)+9 && G.train.v>1) return true;
+  for(const t of G.trains){
+    if(Math.abs(z-t.z)>1.7) continue;
+    const d=t.dir*(x-(t.s+t.dir*t.len/2));
+    if(d>-1 && d<t.v*t.v/(2*2.6)+9 && t.v>1) return true;
   }
   return false;
 }
@@ -2968,7 +3242,8 @@ function ensureMarker(){
 function showMarker(pt){
   const m=ensureMarker();
   m.g.visible=true; m.g.position.set(pt.x,0,pt.z);
-  const danger = Math.abs(pt.z)<G.roadHalfW && dangerAt(pt.x,pt.z);
+  const onRoadArea = Math.abs(pt.z)<G.roadHalfW || (G.signal && Math.abs(pt.x)<G.roadHalfW);
+  const danger = onRoadArea && dangerAt(pt.x,pt.z);
   const col=danger?0xff4433:0x35e08a;
   m.ring.material.color.setHex(col); m.beam.material.color.setHex(col);
 }
@@ -2982,14 +3257,17 @@ function updateSelInfo(){
 }
 function commandMove(gp){
   let i=0;
-  const danger=Math.abs(gp.z)<G.roadHalfW&&dangerAt(gp.x,gp.z);
+  // על הכביש החוצה בצומת מותר להתפזר עד אורך הכביש החוצה (כדי לחסום את הנתיבים החדשים)
+  const onCrossCol = G.signal && Math.abs(gp.x)<G.roadHalfW+2;
+  const zLim = onCrossCol ? CROSS_LEN/2-2 : G.roadHalfW+6;
+  const danger=(Math.abs(gp.z)<G.roadHalfW||onCrossCol)&&dangerAt(gp.x,gp.z);
   G.selected.forEach(p=>{
     if(!p.selectable()) return;
     detach(p);
     if(p.state==='lying'||p.state==='attached') p.state='idle';
     const r=.9*Math.sqrt(i), a=i*2.39996;       // פיזור טבעי — ספירלת זהב
     p.state='moving'; p.attachPending=null;
-    p.target={x:gp.x+r*Math.cos(a), z:clamp(gp.z+r*Math.sin(a),-G.roadHalfW-6,G.roadHalfW+6)};
+    p.target={x:gp.x+r*Math.cos(a), z:clamp(gp.z+r*Math.sin(a),-zLim,zLim)};
     i++;
   });
   if(i){ pingFx(gp,danger?0xff4433:0x35e08a); if(danger) toast('זהירות! רכב מתקרב — מסוכן!','bad'); }
@@ -3230,9 +3508,10 @@ function scoreTick(dt){
   scoreAcc+=dt;
   if(scoreAcc<1) return;
   scoreAcc-=1;
-  const stopped=countStopped();
+  // לפני שההפגנה התחילה בפועל — לא סופרים פקק (עצירה ברמזור אינה הפגנה)
+  const stopped=G.protestStarted?countStopped():0;
   if(stopped) addScore(10*stopped);
-  if(G.train&&G.train.blocked) addScore(50);
+  for(const t of G.trains) if(t.blocked) addScore(50);
   // חוק: הכביש ריק לגמרי והפקק ירד ל-0 — ההפגנה הסתיימה והניקוד נקבע
   if(G.protestStarted){
     const onRoadN=G.peeps.filter(p=>p.onRoad()).length;
@@ -3296,7 +3575,7 @@ function startStage(i){
     G.escTime=0; G.wave=0; G.gameTime=0; G.shofarUsed=false; G.bagT=0;
     G.runovers=0; G.fled=0; G.jamPeak=0; G.bigJamNews=false;
     G.protestStarted=false; G.emptyT=0;
-    G.spawnTimers=[]; G.trainTimer=14; G.copCars=[]; G.drivers=[];
+    G.spawnTimers=[]; G.trainTimer=18; G.copCars=[]; G.drivers=[];
     scoreAcc=0; newsQ=['🔴 מבזק: הפגנה מתארגנת ב'+MAPS[i].name]; newsT=0;
     $('tankWrap').style.display='none';
     $('trainBonus').style.display='none';
@@ -3305,12 +3584,15 @@ function startStage(i){
     // מפגינים פותחים על המדרכה
     const startTypes=['bochur','bochur','bochur','bochur','bochur','bochur','bochur','bochur',
                       'avrech','avrech','avrech','avrech','askan','askan'];
+    // בצומת — מתחילים על המדרכה מזרחית לצומת כדי לא לעמוד על הכביש החוצה
+    const baseX = G.signal? (G.roadHalfW+5) : -12;
     startTypes.forEach((tk,k)=>{
-      mkPeep(tk, -12+ (k%7)*3.6+rnd(-.8,.8), (G.roadHalfW+2.6)+(k>6?1.6:0)+rnd(-.4,.4));
+      mkPeep(tk, baseX+ (k%7)*3.6+rnd(-.8,.8), (G.roadHalfW+2.6)+(k>6?1.6:0)+rnd(-.4,.4));
     });
     // תנועה ראשונית על הציר (מתחילים מעבר לאזור הכניסה כדי לא לחסום ספאון)
     G.laneDefs.forEach(lane=>{
-      for(let s=-G.roadLen/2+17; s<G.roadLen/2-10; s+=rnd(20,34)){
+      const L=laneLen(lane);
+      for(let s=-L/2+17; s<L/2-10; s+=rnd(20,34)){
         const c=spawnCar(lane); if(c) c.s=s;
       }
     });
